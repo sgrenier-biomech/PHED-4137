@@ -19,12 +19,12 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install kineticstoolkit PyQt5 matplotlib numpy
           pip install pyinstaller
 
       - name: Build with PyInstaller
         run: |
-          pyinstaller --noconsole --onefile --collect-all kineticstoolkit gait_app.py
+          pyinstaller --noconsole --onefile --collect-all kineticstoolkit HipOA.py
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
