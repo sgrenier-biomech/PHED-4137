@@ -18,16 +18,19 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
+        # We install the libraries directly here so we don't need the requirements.txt file
         run: |
           pip install kineticstoolkit PyQt5 matplotlib numpy
           pip install pyinstaller
 
       - name: Build with PyInstaller
+        # This now points exactly to your renamed file
         run: |
           pyinstaller --noconsole --onefile --collect-all kineticstoolkit HipOA.py
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GaitApp-${{ matrix.os }}
+          # This name is just the label for the ZIP file you download
+          name: HipOA-Build-${{ matrix.os }}
           path: dist/
