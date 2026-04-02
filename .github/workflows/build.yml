@@ -17,20 +17,25 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
-        # We install the libraries directly here so we don't need the requirements.txt file
+      - name: Auto-locate and Move Script
+        # This looks for any .py file that IS NOT build.yml and moves it to the root
+        # It handles spaces and folder depth automatically.
+        shell: bash
         run: |
-          pip install kineticstoolkit PyQt5 matplotlib numpy
-          pip install pyinstaller
+          find . -maxdepth 3 -name "*.py" ! -name "build.yml" -exec cp {} ./app_to_build.py \;
+          ls -R # This shows us exactly what was found in the logs
+
+      - name: Install dependencies
+        run: |
+          pip install numpy matplotlib scipy PyQt5 ezc3d kineticstoolkit pyinstaller
 
       - name: Build with PyInstaller
-        # We use quotes just in case there are hidden spaces in the folder name
+        # We now build the 'app_to_build.py' we just created
         run: |
-          pyinstaller --noconsole --onefile --collect-all kineticstoolkit PHED-4137/*.py
-          
+          pyinstaller --noconsole --onefile --collect-all kineticstoolkit app_to_build.py
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          # This name is just the label for the ZIP file you download
-          name: HipOA-Build-${{ matrix.os }}
+          name: GaitApp-Build-${{ matrix.os }}
           path: dist/
