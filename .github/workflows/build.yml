@@ -23,7 +23,7 @@ jobs:
           pip install kineticstoolkit PyQt5 matplotlib numpy
           pip install pyinstaller
 
-      - - name: Build with PyInstaller
+      - name: Build with PyInstaller
         # We use quotes just in case there are hidden spaces in the folder name
         run: |
           pyinstaller --noconsole --onefile --collect-all kineticstoolkit "PHED-4137/ HipOA .py"
