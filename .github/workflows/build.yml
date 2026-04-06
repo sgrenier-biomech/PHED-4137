@@ -18,24 +18,29 @@ jobs:
           python-version: '3.10'
 
       - name: Auto-locate and Move Script
-        # This looks for any .py file that IS NOT build.yml and moves it to the root
-        # It handles spaces and folder depth automatically.
         shell: bash
         run: |
           find . -maxdepth 3 -name "*.py" ! -name "build.yml" -exec cp {} ./app_to_build.py \;
-          ls -R # This shows us exactly what was found in the logs
+          ls -R
 
       - name: Install dependencies
         run: |
           pip install numpy matplotlib scipy PyQt5 ezc3d kineticstoolkit pyinstaller
 
       - name: Build with PyInstaller
-        # We now build the 'app_to_build.py' we just created
+        # Added logic to name the file based on the OS
+        shell: bash
         run: |
-          pyinstaller --noconsole --onefile --collect-all kineticstoolkit app_to_build.py
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            APP_NAME="GaitApp_Windows"
+          else
+            APP_NAME="GaitApp_macOS"
+          fi
+          pyinstaller --noconsole --onefile --collect-all kineticstoolkit --name "$APP_NAME" app_to_build.py
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GaitApp-Build-${{ matrix.os }}
+          # This will now create folders named 'GaitApp_Windows' or 'GaitApp_macOS'
+          name: GaitApp_${{ matrix.os == 'windows-latest' && 'Windows' || 'macOS' }}
           path: dist/
