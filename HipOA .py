@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Apr  1 16:47:54 2026
+Created on Wed Apr  8 10:33:31 2026
 
 @author: sgrenier
 """
+
 print("--- GUI IS INITIALIZING ---")
 import sys
 import kineticstoolkit.lab as ktk
+import matplotlib
+# MUST be called before importing pyplot to fix Mac buttons and Windows animation
+matplotlib.use('Qt5Agg')  
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QPushButton, 
                              QLabel, QComboBox, QRadioButton, QHBoxLayout, 
-                             QFileDialog, QGroupBox, QMainWindow, QStyle, QMessageBox)
+                             QFileDialog, QGroupBox, QMainWindow, QStyle, 
+                             QMessageBox, QLineEdit) 
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtCore import QUrl, Qt
@@ -48,9 +53,12 @@ class GaitDashboard(QWidget):
         super().__init__()
         self.file_pre = None
         self.file_post = None
-        self.video_win = None # Persistent reference to the video window
+        self.video_win = None 
         self.video_path_pre = None
         self.video_path_post = None
+        
+        # Biomechanics Settings
+        self.body_mass_kg = 70.0  # Default mass for normalization (adjust as needed)
         
         self.interconnections = {
             "Pelvis": {"Color": (1, 0.5, 1), "Links": [["LASI", "RASI", "RPSI", "LPSI", "LASI"]]},
@@ -101,11 +109,28 @@ class GaitDashboard(QWidget):
         self.btn_plot_grf.clicked.connect(self.plot_grf_comparison)
         self.btn_plot_grf.setStyleSheet("height: 35px; background-color: #f1f8e9;")
         layout.addWidget(self.btn_plot_grf)
-
+        
+        self.btn_plot_cop = QPushButton("Plot COP Trajectory (X vs. Y)")
+        self.btn_plot_cop.clicked.connect(self.plot_cop_2d_path)
+        self.btn_plot_cop.setStyleSheet("height: 35px; background-color: #fff9c4; font-weight: bold;")
+        layout.addWidget(self.btn_plot_cop)
+        
         self.btn_plot_com = QPushButton("Plot CoM Trajectory (2D)")
         self.btn_plot_com.clicked.connect(self.plot_com_2d)
         self.btn_plot_com.setStyleSheet("height: 35px; background-color: #fce4ec; font-weight: bold;")
         layout.addWidget(self.btn_plot_com)
+        
+        # # Add a Mass Input row
+        # mass_layout = QHBoxLayout()
+        # mass_label = QLabel("Subject Mass (kg):")
+        # self.edit_mass = QLineEdit("70.0")  # Default value as a string
+        # self.edit_mass.setFixedWidth(60)
+        # mass_layout.addWidget(mass_label)
+        # mass_layout.addWidget(self.edit_mass)
+        # mass_layout.addStretch()
+        
+        # # Add it to your existing settings layout
+        # s_layout.addLayout(mass_layout)
 
         for g in ["Pre", "Post"]:
             h = QHBoxLayout()
@@ -145,58 +170,241 @@ class GaitDashboard(QWidget):
                     axs[i].text(t_ev, 0.95, lbl, color=color, rotation=90, 
                                 verticalalignment='top', fontsize=8, fontweight='bold',
                                 transform=axs[i].get_xaxis_transform())
-
+    def get_body_mass(self):
+        try:
+            return float(self.edit_mass.text())
+        except ValueError:
+            # Fallback to 70kg and warn the user
+            QMessageBox.warning(self, "Invalid Mass", "Please enter a numeric value for mass. Defaulting to 70kg.")
+            self.edit_mass.setText("70.0")
+            return 70.0
+        
     def plot_joint(self):
-        if not self.file_pre or not self.file_post: return
+        if not self.file_pre or not self.file_post: 
+            QMessageBox.warning(self, "Missing Files", "Please load both Pre and Post files.")
+            return
+            
         side = "L" if self.rb_left.isChecked() else "R"
         joint, metric = self.combo_joint.currentText(), self.combo_metric.currentText()
         var = f"{side}{joint}Angles" if metric == "Angle" else f"{side}{joint}{metric}"
+        
         fig, axs = plt.subplots(3, 1, sharex=True, figsize=(10, 8))
         planes = ["Sagittal (X)", "Frontal (Y)", "Transverse (Z)"]
+        
         for f, label, color in [(self.file_pre, "Pre", '#1f77b4'), (self.file_post, "Post", '#ff7f0e')]:
             try:
-                data = ktk.read_c3d(f)
+                # convert_point_unit=False prevents clinical degrees from being divided by 1000
+                data = ktk.read_c3d(f, convert_point_unit=False)
                 points = data["Points"]
-                t0 = [e.time for e in points.events if "STRIKE" in e.name.upper()][0] if points.events else 0
+                
+                # Time normalization to first strike
+                strikes = [e.time for e in points.events if "STRIKE" in e.name.upper()]
+                t0 = strikes[0] if strikes else points.time[0]
+                
                 if var in points.data:
                     for i in range(3):
-                        axs[i].plot(points.time - t0, points.data[var][:, i], color=color, label=label if i==0 else None)
-                        axs[i].set_ylabel(planes[i]); axs[i].grid(True, alpha=0.3)
-                    self.draw_events(axs, points, t0, color)
-            except: pass
-        axs[0].legend(); plt.suptitle(f"{joint} {metric} Comparison"); plt.show()
+                        # Ensure 1D array for math
+                        plot_data = points.data[var][:, i].flatten()
+                        
+                        
+                        #Fix Flipping/Gimbal Lock (Only for Angles)
+                        if metric == "Angle":
+                            # Use unwrap to remove 360-degree jumps
+                            plot_data = np.unwrap(plot_data * np.pi / 180) * 180 / np.pi
+                            
+                            # Shift mean toward zero to align Pre and Post
+                            # (Prevents one being at 0 and the other at 360)
+                            if (np.nanmax(plot_data) - np.nanmin(plot_data)) > 150:
+                                offset = round(np.nanmean(plot_data) / 180) * 180
+                                plot_data = plot_data - offset
+                                
+                        # 2. FIX: Scaling for Moments
+                        # If the values are > 100, they are likely in N*mm. 
+                        # Clinical standard is N*m (or N*m/kg). 
+                        elif metric == "Moment":
+                            if np.nanmax(np.abs(plot_data)) > 50:
+                                plot_data = plot_data / 1000.0  # Convert mm to m
+                
+                        # 3. FIX: Horizontal "Tiers" (Vertical Offsets)
+                        # If there are massive jumps in Moments, it's a C3D metadata error.
+                        # This zero-centers the moment around the first few frames.
+                        if metric == "Moment" or metric == "Force":
+                            plot_data = plot_data - np.nanmedian(plot_data[:10])                                
 
-    def plot_grf_comparison(self):
-        if not self.file_pre and not self.file_post: return
-        fig, axs = plt.subplots(3, 1, sharex=True, figsize=(10, 8))
-        labels = ["Medio-Lateral (X)", "Antero-Posterior (Y)", "Vertical (Z)"]
+                        # 3. Plotting (Now correctly inside the 'i' loop)
+                        axs[i].plot(points.time - t0, plot_data, color=color, label=label if i==0 else None)
+                        
+                        # Set the units based on what we are plotting
+                        if metric == "Angle":
+                            unit_label = " [deg]"
+                        elif metric == "Moment":
+                            unit_label = " [N·m/kg]"  # Standard clinical unit
+                        elif metric == "Power":
+                            unit_label = " [W/kg]"
+                        elif metric == "Force":
+                            unit_label = " [N/kg]"
+                        else:
+                            unit_label = ""                       
+                        axs[i].set_ylabel(f"{planes[i]}{unit_label}")
+                        axs[i].grid(True, alpha=0.3)
+                    
+                    self.draw_events(axs, points, t0, color)
+            except Exception as e: 
+                print(f"Error processing {label}: {e}")
+
+        # Add legend only if data was plotted
+        handles, labels = axs[0].get_legend_handles_labels()
+        if handles:
+            axs[0].legend(handles, labels)
+            
+        plt.suptitle(f"{joint} {metric} Comparison")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
         
+    def plot_grf_comparison(self):
+        if not self.file_pre and not self.file_post: 
+            QMessageBox.warning(self, "Missing Files", "Please load both Pre and Post files.")
+            return
+        
+        # 3 Rows (Planes), 2 Columns (Pre, Post)
+        fig, axs = plt.subplots(3, 2, sharex=True, sharey=True, figsize=(12, 10))
+        planes = ["Medio-Lateral (X)", "Antero-Posterior (Y)", "Vertical (Z)"]
+        col_map = {"Pre": 0, "Post": 1}
+
         for f, group_label, color in [(self.file_pre, "Pre", '#1f77b4'), (self.file_post, "Post", '#ff7f0e')]:
             if not f: continue
+            col = col_map[group_label]
+            
             try:
-                data = ktk.read_c3d(f)
+                data = ktk.read_c3d(f, convert_point_unit=True)
                 points = data["Points"]
                 fp_group = data["ForcePlatforms"]
-                t0 = [e.time for e in points.events if "STRIKE" in e.name.upper()][0] if points.events else 0
+                
+                # Align to first strike
+                strikes = [e.time for e in points.events if "STRIKE" in e.name.upper()]
+                t0 = strikes[0] if strikes else fp_group.time[0]
                 
                 for p in [0, 1]:
                     chan = f"FP{p}_Force"
                     ls = "-" if p == 0 else "--"
+                    
                     if chan in fp_group.data:
-                        for i in range(3):
-                            axs[i].plot(fp_group.time - t0, fp_group.data[chan][:, i]/9.81, 
-                                         color=color, linestyle=ls, 
-                                         label=f"{group_label} FP{p}" if i==0 else None)
-                self.draw_events(axs, points, t0, color)
+                        for row in range(3):
+                            plot_data = fp_group.data[chan][:, row].flatten()
+                            # Normalizing to BW (70kg default)
+                            plot_data = plot_data / (70.0 * 9.81)
+                            
+                            ax = axs[row, col]
+                            ax.plot(fp_group.time - t0, plot_data, 
+                                    color=color, linestyle=ls, 
+                                    label=f"Plate {p}" if row == 0 else None)
+                            
+                            if col == 0: ax.set_ylabel(f"{planes[row]} [BW]")
+                            if row == 0: ax.set_title(f"Group: {group_label}")
+                            ax.grid(True, alpha=0.3)
+                
+                # IMPROVED: Call the label drawer specifically for this column
+                self.draw_labels_on_grid(axs, points, t0, color, col)
+
             except Exception as e:
-                print(f"GRF Error: {e}")
+                print(f"GRF Error for {group_label}: {e}")
 
-        for i in range(3): 
-            axs[i].set_ylabel(f"{labels[i]} [BW]")
-            axs[i].grid(True, alpha=0.3)
-        axs[0].legend(fontsize='x-small', ncol=2)
-        plt.suptitle("Bilateral GRF Comparison (ForcePlatforms)\nSolid: Platform 0 | Dashed: Platform 1"); plt.show()
+        axs[0, 0].legend(fontsize='x-small')
+        axs[0, 1].legend(fontsize='x-small')
+        plt.suptitle("Ground Reaction Force (GRF) Comparison\nNormalized to Body Weight (BW)")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
 
+    def draw_labels_on_grid(self, axs, points, t0, color, col):
+        """Draws vertical lines and 'Strike/Off' text labels on a specific column"""
+        for e in points.events:
+            e_name = e.name.upper()
+            if "STRIKE" in e_name or "OFF" in e_name:
+                t_rel = e.time - t0
+                ls = '-' if "STRIKE" in e_name else '--'
+                
+                for row in range(3):
+                    ax = axs[row, col]
+                    # Draw the vertical line
+                    ax.axvline(t_rel, color=color, linestyle=ls, alpha=0.3)
+                    
+                    # Only put the TEXT label on the TOP row to avoid clutter
+                    if row == 0:
+                        ax.text(t_rel, ax.get_ylim()[1], e.name, 
+                                color=color, rotation=90, va='bottom', ha='right', fontsize=8)
+
+    def draw_events_on_cols(self, axs, points, t0, color, col):
+        """Helper to draw event lines only on the active column"""
+        for e in points.events:
+            if "STRIKE" in e.name.upper() or "OFF" in e.name.upper():
+                ls = '-' if "STRIKE" in e.name.upper() else '--'
+                for row in range(3):
+                    axs[row, col].axvline(e.time - t0, color=color, linestyle=ls, alpha=0.3)
+                    
+    def plot_cop_2d_path(self):
+        if not self.file_pre and not self.file_post: 
+            QMessageBox.warning(self, "Missing Files", "Please load both Pre and Post files.")
+            return
+        
+        # Threshold (N/kg) to isolate stance phase (approx 5% BW)
+        threshold_nkg = 0.5 
+
+        # Create 1 row, 2 columns for side-by-side comparison
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8), sharey=True, sharex=True)
+        axes = {'Pre': ax1, 'Post': ax2}
+        
+        for f, label, color in [(self.file_pre, "Pre", '#1f77b4'), (self.file_post, "Post", '#ff7f0e')]:
+            if not f: continue
+            ax = axes[label]
+            try:
+                data = ktk.read_c3d(f, convert_point_unit=True)
+                fp_group = data["ForcePlatforms"]
+                
+                all_handles = []
+                all_labels = []
+
+                for p in [0, 1]:
+                    force_chan = f"FP{p}_Force"
+                    cop_chan = f"FP{p}_COP"
+                    ls = "-" if p == 0 else "--" 
+                    
+                    if force_chan in fp_group.data and cop_chan in fp_group.data:
+                        fz = fp_group.data[force_chan][:, 2].flatten() 
+                        copx = fp_group.data[cop_chan][:, 0].flatten()
+                        copy = fp_group.data[cop_chan][:, 1].flatten()
+                        
+                        # Thresholding using the 70kg default or mass logic
+                        is_stance = np.abs(fz / 70.0) > threshold_nkg
+                        
+                        copx_s = np.where(is_stance, copx, np.nan)
+                        copy_s = np.where(is_stance, copy, np.nan)
+                        
+                        if np.any(is_stance):
+                            # Zero-center relative to the platform's own data
+                            copx_s = copx_s - np.nanmedian(copx_s)
+                            copy_s = copy_s - np.nanmedian(copy_s)
+
+                            line, = ax.plot(copx_s, copy_s, color=color, linestyle=ls, alpha=0.8)
+                            all_handles.append(line)
+                            all_labels.append(f"Plate {p}")
+
+                # Format individual subplot
+                ax.set_title(f"Group: {label}")
+                ax.set_xlabel("ML COP (X) [m]")
+                if label == "Pre": ax.set_ylabel("AP COP (Y) [m]")
+                ax.grid(True, alpha=0.3)
+                ax.axhline(0, color='black', lw=1, alpha=0.2)
+                ax.axvline(0, color='black', lw=1, alpha=0.2)
+                ax.legend(all_handles, all_labels, fontsize='x-small')
+
+            except Exception as e:
+                print(f"COP Error for {label}: {e}")
+
+        plt.suptitle("Center of Pressure Trajectory Comparison (X vs. Y)\n(Stance Phase Only)")
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        plt.show()
+        
+        
     def plot_com_2d(self):
         if not self.file_pre and not self.file_post: return
         fig, axs = plt.subplots(3, 1, sharex=True, figsize=(10, 8))
@@ -204,13 +412,13 @@ class GaitDashboard(QWidget):
         for f, label, color in [(self.file_pre, "Pre", '#1f77b4'), (self.file_post, "Post", '#ff7f0e')]:
             if not f: continue
             try:
-                data = ktk.read_c3d(f)
+                data = ktk.read_c3d(f, convert_point_unit=True)
                 points = data["Points"]
                 t0 = [e.time for e in points.events if "STRIKE" in e.name.upper()][0] if points.events else 0
                 com = points.data['CentreOfMass']
                 for i in range(3):
                     axs[i].plot(points.time - t0, com[:, i], color=color, label=label if i==0 else None)
-                    axs[i].set_ylabel(planes[i]); axs[i].grid(True, alpha=0.3)
+                    axs[i].set_ylabel(f"{planes[i]} [m]"); axs[i].grid(True, alpha=0.3)
                 self.draw_events(axs, points, t0, color)
             except: pass
         plt.suptitle("CoM Comparison"); plt.show()
@@ -227,6 +435,8 @@ class GaitDashboard(QWidget):
             filtered_points = ktk.TimeSeries(time=points.time)
             for marker in used_markers:
                 if marker in points.data: filtered_points.data[marker] = points.data[marker]
+            
+            # The Player will now be interactive on both OSs thanks to Qt5Agg
             p = ktk.Player(filtered_points, up="z", anterior="y", target_distance=5.0)
             p.set_interconnections(self.interconnections)
 
@@ -239,7 +449,6 @@ class GaitDashboard(QWidget):
                 else: self.video_path_post = path
             else: return
         
-        # FIX: Assign to self.video_win so it persists in memory
         self.video_win = VideoPlayer(path, grp)
         self.video_win.show()
 
