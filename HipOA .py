@@ -9,9 +9,13 @@ Created on Wed Apr  8 10:33:31 2026
 print("--- GUI IS INITIALIZING ---")
 import sys
 import kineticstoolkit.lab as ktk
+
 import matplotlib
 # MUST be called before importing pyplot to fix Mac buttons and Windows animation
 matplotlib.use('Qt5Agg')  
+
+import matplotlib.animation as animation
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
@@ -426,20 +430,33 @@ class GaitDashboard(QWidget):
     def animate_file(self, grp):
         f = self.file_pre if grp == "Pre" else self.file_post
         if f:
+            # Explicitly close any old windows to prevent the "Still Image" ghosting
+            plt.close('all')
+            
             data = ktk.read_c3d(f, convert_point_unit=True)
             points = data["Points"]
             used_markers = set()
             for segment in self.interconnections.values():
                 for link in segment["Links"]:
                     for marker in link: used_markers.add(marker)
+            
             filtered_points = ktk.TimeSeries(time=points.time)
             for marker in used_markers:
-                if marker in points.data: filtered_points.data[marker] = points.data[marker]
+                if marker in points.data: 
+                    filtered_points.data[marker] = points.data[marker]
             
-            # The Player will now be interactive on both OSs thanks to Qt5Agg
+            # 1. Turn on interactive mode for Windows stability
+            plt.ion()
+            
+            # 2. Create the player
             p = ktk.Player(filtered_points, up="z", anterior="y", target_distance=5.0)
             p.set_interconnections(self.interconnections)
-
+            
+            # 3. The Windows "Kickstart": Show the window and start playing
+            # This ensures the Matplotlib backend starts processing frames
+            plt.show(block=False)
+            p.play()
+            
     def play_video(self, grp):
         path = self.video_path_pre if grp == "Pre" else self.video_path_post
         if not path:
