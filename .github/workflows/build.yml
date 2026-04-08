@@ -5,7 +5,11 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
+        include:
+          - os: windows-latest
+            app_name: "GaitApp_Windows"
+          - os: macos-13  # Better compatibility for Intel/Older Macs than 'latest'
+            app_name: "GaitApp_macOS"
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -28,19 +32,27 @@ jobs:
           pip install numpy matplotlib scipy PyQt5 ezc3d kineticstoolkit pyinstaller
 
       - name: Build with PyInstaller
-        # Added logic to name the file based on the OS
         shell: bash
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            APP_NAME="GaitApp_Windows"
+            # Windows remains as a single .exe
+            pyinstaller --noconsole --onefile --collect-all kineticstoolkit --name "${{ matrix.app_name }}" app_to_build.py
           else
-            APP_NAME="GaitApp_macOS"
+            # MacOS Build with 11.5 Target
+            # Using --windowed creates a proper .app bundle which is better for Mac users
+            export MACOSX_DEPLOYMENT_TARGET=11.5
+            pyinstaller --noconsole --windowed --collect-all kineticstoolkit --name "${{ matrix.app_name }}" app_to_build.py
+            
+            # Zip the .app because GitHub Artifacts don't preserve Mac file permissions well
+            cd dist
+            zip -r "${{ matrix.app_name }}_BigSur.zip" "${{ matrix.app_name }}.app"
           fi
-          pyinstaller --noconsole --onefile --collect-all kineticstoolkit --name "$APP_NAME" app_to_build.py
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          # This will now create folders named 'GaitApp_Windows' or 'GaitApp_macOS'
-          name: GaitApp_${{ matrix.os == 'windows-latest' && 'Windows' || 'macOS' }}
-          path: dist/
+          name: ${{ matrix.app_name }}
+          # Path logic: Upload the .exe for Windows, but the .zip for Mac
+          path: |
+            dist/*.exe
+            dist/*.zip
