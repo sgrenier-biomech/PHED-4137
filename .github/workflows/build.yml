@@ -8,7 +8,7 @@ jobs:
         include:
           - os: windows-latest
             app_name: "GaitApp_Windows"
-          - os: macos-13  # Better compatibility for Intel/Older Macs than 'latest'
+          - os: macos-12  # Most stable runner for older macOS 11.5 compatibility
             app_name: "GaitApp_macOS"
     runs-on: ${{ matrix.os }}
 
@@ -35,24 +35,24 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Windows remains as a single .exe
+            # Windows: standard single executable
             pyinstaller --noconsole --onefile --collect-all kineticstoolkit --name "${{ matrix.app_name }}" app_to_build.py
           else
-            # MacOS Build with 11.5 Target
-            # Using --windowed creates a proper .app bundle which is better for Mac users
+            # macOS: Targeting Big Sur 11.5
             export MACOSX_DEPLOYMENT_TARGET=11.5
+            # --windowed is required to create a .app bundle
             pyinstaller --noconsole --windowed --collect-all kineticstoolkit --name "${{ matrix.app_name }}" app_to_build.py
             
-            # Zip the .app because GitHub Artifacts don't preserve Mac file permissions well
+            # ZIP the app folder to preserve executable permissions for students
             cd dist
-            zip -r "${{ matrix.app_name }}_BigSur.zip" "${{ matrix.app_name }}.app"
+            zip -r "${{ matrix.app_name }}_v1.6_Mac.zip" "${{ matrix.app_name }}.app"
           fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.app_name }}
-          # Path logic: Upload the .exe for Windows, but the .zip for Mac
+          # Upload the .exe for Windows and the .zip for macOS
           path: |
             dist/*.exe
             dist/*.zip
